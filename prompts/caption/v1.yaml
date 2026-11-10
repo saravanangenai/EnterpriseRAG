@@ -1,0 +1,13 @@
+name: caption
+version: 1
+used_by: app/ingestion/pipeline.py (vision model, image captions and OCR at ingestion)
+variables: []
+changelog: Initial version, moved out of pipeline.py unchanged.
+# Changing this prompt changes the caption cache key, so images are captioned again the
+# next time their document is ingested. Chunks record the version in payload.caption_prompt.
+template: >-
+  You are indexing a document for search. Describe this image so someone could find it
+  by text search. Transcribe all visible text and numbers exactly. If it is a chart,
+  state the type, axes, series and key values. If it is a table, output it as a markdown
+  table. If it is a photo, describe the subject and any visible labels.
+  Do not guess beyond what is visible.

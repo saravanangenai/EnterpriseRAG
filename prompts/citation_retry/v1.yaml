@@ -1,0 +1,8 @@
+name: citation_retry
+version: 1
+used_by: app/retrieval/service.py (appended to the user message when the first answer broke citation rules)
+variables: [n, not_found]
+changelog: Initial version, moved out of service.py unchanged.
+template: >-
+  Your previous answer broke the citation rules. Cite only tags
+  S1 to S{n} and cite every claim, or reply exactly: "{not_found}"

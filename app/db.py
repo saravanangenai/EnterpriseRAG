@@ -52,8 +52,18 @@ CREATE TABLE IF NOT EXISTS audit_log (
     model       TEXT,
     tokens      INTEGER,
     latency_ms  INTEGER,
-    trace_id    TEXT
+    trace_id    TEXT,
+    prompt_versions TEXT,  -- JSON {name: "answer@v1#1a2b3c4d", ...}: prompts this answer used
+    cache_hit   INTEGER    -- 1 when the answer came from the answer cache
 );
+
+-- One row. Bumped whenever searchable content changes (ingestion finished or failed, delete),
+-- so cached answers from before the change are never served.
+CREATE TABLE IF NOT EXISTS corpus_state (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    version  INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO corpus_state (id, version) VALUES (1, 0);
 
 CREATE TABLE IF NOT EXISTS eval_runs (
     run_id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,11 +80,23 @@ async def init_db() -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(path) as db:
         await db.executescript(SCHEMA)
-        try:  # databases created before tracing existed
-            await db.execute("ALTER TABLE audit_log ADD COLUMN trace_id TEXT")
-        except aiosqlite.OperationalError:
-            pass  # column already there
+        for column, kind in (("trace_id", "TEXT"), ("prompt_versions", "TEXT"), ("cache_hit", "INTEGER")):
+            try:  # columns added after the first release
+                await db.execute(f"ALTER TABLE audit_log ADD COLUMN {column} {kind}")
+            except aiosqlite.OperationalError:
+                pass  # column already there
         await db.commit()
+
+
+async def bump_corpus_version(db: aiosqlite.Connection) -> None:
+    """Call inside the transaction that changes searchable content; the caller commits."""
+    await db.execute("UPDATE corpus_state SET version = version + 1 WHERE id = 1")
+
+
+async def corpus_version(db_path) -> int:
+    async with aiosqlite.connect(db_path) as db:
+        row = await (await db.execute("SELECT version FROM corpus_state WHERE id = 1")).fetchone()
+    return row[0] if row else 0
 
 
 async def get_db() -> AsyncIterator[aiosqlite.Connection]:

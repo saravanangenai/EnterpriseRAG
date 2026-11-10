@@ -6,9 +6,11 @@ from pathlib import Path
 
 import aiosqlite
 
+from app.db import bump_corpus_version
 from app.ingestion.chunking import Chunk, chunk_blocks
 from app.ingestion.parsers import Block, ParseContext, parse_file
 from app.pii import PiiScanner
+from app.prompts import PromptSet, load_prompts
 from app.providers.base import Embedder, VisionCaptioner
 from app.settings import AppConfig, Settings
 from app.tracing import NullTracer, span
@@ -16,13 +18,7 @@ from app.vectorstore import Point, VectorStore
 
 log = logging.getLogger("ingestion")
 
-CAPTION_PROMPT = (
-    "You are indexing a document for search. Describe this image so someone could find it "
-    "by text search. Transcribe all visible text and numbers exactly. If it is a chart, "
-    "state the type, axes, series and key values. If it is a table, output it as a markdown "
-    "table. If it is a photo, describe the subject and any visible labels. "
-    "Do not guess beyond what is visible."
-)
+# The caption prompt is prompts/caption/v<N>.yaml; config.yaml picks the active version.
 
 
 class Ingestor:
@@ -36,8 +32,10 @@ class Ingestor:
         sparse,
         pii: PiiScanner,
         tracer=None,
+        prompts: PromptSet | None = None,
     ):
         self.tracer = tracer or NullTracer()
+        self.caption_prompt = (prompts or load_prompts(cfg))["caption"]
         self.cfg, self.settings = cfg, settings
         self.embedder, self.vision, self.store = embedder, vision, store
         self.sparse, self.pii = sparse, pii
@@ -57,13 +55,15 @@ class Ingestor:
         """Returns True when the caption came from the cache (no vision call)."""
         path = self.data_dir / block.asset_path
         data = path.read_bytes()
-        key = hashlib.sha256(data).hexdigest()
+        cp = self.caption_prompt
+        # Keyed by image AND prompt: a new caption prompt really produces new captions.
+        key = f"{hashlib.sha256(data).hexdigest()}_{cp.sha256[:16]}"
         cache = self.data_dir / "captions" / f"{key}.txt"
-        if cache.exists():  # caption each image once
+        if cache.exists():  # caption each image once per prompt version
             block.text = cache.read_text(encoding="utf-8")
             return True
         async with sem:
-            text = await self.vision.caption(data, block.mime or "image/png", CAPTION_PROMPT)
+            text = await self.vision.caption(data, block.mime or "image/png", cp.render())
         text = text.strip()
         if text:
             cache.parent.mkdir(parents=True, exist_ok=True)
@@ -93,6 +93,10 @@ class Ingestor:
                 log.exception("ingestion failed for document row %s", pk)
                 root.update(level="ERROR", status_message=type(e).__name__)
                 await self._set_status(pk, "failed", error=f"{type(e).__name__}: {e}"[:500])
+                # Batches stored before the failure are searchable: invalidate cached answers.
+                async with aiosqlite.connect(self.settings.db_path) as db:
+                    await bump_corpus_version(db)
+                    await db.commit()
             finally:
                 root.end()
 
@@ -106,7 +110,10 @@ class Ingestor:
         # File names can identify people, so they are traced only when content logging is on.
         root.update(
             input=self.tracer.text(row["filename"]),
-            metadata={"document_id": document_id, "version": version, "ext": Path(row["filename"]).suffix.lower()},
+            metadata={
+                "document_id": document_id, "version": version, "ext": Path(row["filename"]).suffix.lower(),
+                "prompts": {"caption": self.caption_prompt.id},
+            },
         )
         await self._set_status(pk, "processing")
         await self.store.ensure()
@@ -124,7 +131,7 @@ class Ingestor:
 
         images = [b for b in blocks if b.kind == "image"]
         with span(root, "caption", as_type="generation", model=getattr(self.vision, "model", None),
-                  input={"images": len(images)}) as s:
+                  input={"images": len(images)}, metadata={"prompt": self.caption_prompt.id}) as s:
             sem = asyncio.Semaphore(self.cfg.ingestion.caption_concurrency)
             cached = await asyncio.gather(*(self._caption(b, sem) for b in images))
             s.update(output={"captioned": len(images) - sum(cached), "from_cache": sum(cached)})
@@ -160,6 +167,8 @@ class Ingestor:
                 "asset_path": c.asset_path,
                 "access_group": None,  # placeholder, unused in v1
                 "pii_flags": c.pii_flags or [],
+                # Which caption prompt wrote this text (image chunks only), to find chunks to re-caption.
+                "caption_prompt": self.caption_prompt.id if c.type == "image" else None,
                 "text": c.text,
             }
 
@@ -208,6 +217,7 @@ class Ingestor:
                 "AND status='ready'",
                 (document_id, version),
             )
+            await bump_corpus_version(db)  # cached answers may cite chunks that just changed
             await db.commit()
         await self._set_status(pk, "ready", count=len(ids))
         log.info(

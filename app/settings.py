@@ -61,6 +61,23 @@ class TracingCfg(BaseModel):
     environment: str = "dev"    # tag traces by environment (dev, vm, ci)
 
 
+class CacheCfg(BaseModel):
+    query_embedding_max_entries: int = 256
+    answer_enabled: bool = True
+    answer_ttl_seconds: int = 3600
+    answer_max_entries: int = 256
+
+
+class PromptsCfg(BaseModel):
+    """Active version of each prompt: prompts/<name>/v<N>.yaml (see prompts/README.md)."""
+
+    dir: str = "prompts"
+    answer: int = 1
+    citation_retry: int = 1
+    rerank: int = 1
+    caption: int = 1
+
+
 class AppConfig(BaseModel):
     tracing: TracingCfg = TracingCfg()
     assets: AssetsCfg = AssetsCfg()
@@ -73,6 +90,8 @@ class AppConfig(BaseModel):
     retrieval: RetrievalCfg = RetrievalCfg()
     auth: AuthCfg = AuthCfg()
     qdrant: QdrantCfg = QdrantCfg()
+    prompts: PromptsCfg = PromptsCfg()
+    cache: CacheCfg = CacheCfg()
 
     @property
     def collection_name(self) -> str:

@@ -112,6 +112,20 @@ class MemStore:
             self.points.pop(i)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_langfuse(monkeypatch):
+    """Tests never use the real Langfuse keys from .env: traces would go to Langfuse Cloud,
+    and the app's shutdown flush hangs when the network is blocked."""
+    from app.deps import get_tracer
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "")
+    st.get_settings.cache_clear()
+    get_tracer.cache_clear()
+    yield
+    get_tracer.cache_clear()
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))

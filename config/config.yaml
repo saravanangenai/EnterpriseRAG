@@ -50,3 +50,15 @@ auth:
 
 qdrant:
   collection_prefix: erag   # full name: <prefix>_<embedding model>_<dimensions>
+
+prompts:                    # active version of each prompt: prompts/<name>/v<N>.yaml (see prompts/README.md)
+  answer: 1
+  citation_retry: 1
+  rerank: 1
+  caption: 1
+
+cache:                      # in-process caches (one uvicorn worker); use Redis before adding workers
+  query_embedding_max_entries: 256
+  answer_enabled: true      # exact-match answers; invalidated by any ingestion or delete
+  answer_ttl_seconds: 3600
+  answer_max_entries: 256

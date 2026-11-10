@@ -8,7 +8,7 @@ import aiosqlite
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, UploadFile
 
 from app.auth import get_current_user, require_roles
-from app.db import get_db
+from app.db import bump_corpus_version, get_db
 from app.deps import get_ingestor, get_store
 from app.ingestion.pipeline import Ingestor
 from app.settings import get_config, get_settings
@@ -122,6 +122,7 @@ async def delete_document(
     await store.delete_document(document_id)
     await db.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
     await db.execute("DELETE FROM documents WHERE document_id=?", (document_id,))
+    await bump_corpus_version(db)  # cached answers citing this document must not be served
     await db.commit()
     data = Path(get_settings().data_dir)
     for sub in ("raw", "assets"):

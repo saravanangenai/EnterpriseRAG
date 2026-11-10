@@ -8,6 +8,7 @@ import aiosqlite
 import yaml
 
 from app.guardrails import GuardrailBlocked
+from app.prompts import load_prompts
 from evaluation.metrics import (
     aggregate,
     aggregate_redteam,
@@ -106,6 +107,7 @@ def build_report(cfg, golden: list[dict], redteam: list[dict]) -> dict:
             "chunking": cfg.chunking.model_dump(),
             "retrieval": cfg.retrieval.model_dump(),
             "collection": cfg.collection_name,
+            "prompts": load_prompts(cfg).ids,
         },
         "metrics": aggregate(golden),
         "redteam_metrics": aggregate_redteam(redteam),
