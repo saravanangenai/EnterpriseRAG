@@ -1,0 +1,11 @@
+[Unit]
+Description=Enterprise RAG backup
+
+[Service]
+Type=oneshot
+User=erag
+Group=erag
+# Optional settings file: AGE_RECIPIENT=age1...   GCS_BUCKET=my-bucket   KEEP=7
+EnvironmentFile=-/etc/erag-backup.env
+ExecStart=/usr/local/bin/erag-backup
+Nice=10

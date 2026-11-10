@@ -1,0 +1,52 @@
+# Non-secret settings. Secrets (API keys, JWT secret) live in .env.
+# Model names change often: verify against each provider's current model list before use.
+
+llm:                      # answers, rerank, judge
+  provider: groq
+  model: openai/gpt-oss-120b
+  rerank_model: openai/gpt-oss-120b
+
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+  dimensions: 768          # changing model or dimensions needs a NEW Qdrant collection + re-embed
+
+vision:                    # image captions and OCR at ingestion
+  provider: openai
+  model: gpt-4o-mini
+
+ingestion:
+  max_upload_mb: 20
+  image_min_px: 100        # skip smaller images (icons, logos)
+  pdf_render_dpi: 120      # for scanned pages sent to vision
+  caption_concurrency: 2
+  embed_batch: 64
+
+pii:
+  mode: flag               # off | flag (record entity types) | mask (replace before embedding)
+  language: en
+
+chunking:
+  size: 1000
+  overlap_pct: 15
+  strategy: structure_aware
+
+retrieval:
+  top_k: 20
+  rerank_enabled: true
+  rerank_top_n: 6
+  min_score: 0.2           # relevance gate on top dense cosine score; starting guess, tune on the golden set
+
+assets:
+  url_ttl_seconds: 300     # signed image links expire after this
+
+tracing:                   # Langfuse; active only when both LANGFUSE keys are set in .env
+  enabled: true
+  log_content: false       # false = no question/answer/document text leaves the VM, only IDs, scores, counts
+  environment: dev         # use "vm" on the server so traces can be filtered
+
+auth:
+  access_token_minutes: 60
+
+qdrant:
+  collection_prefix: erag   # full name: <prefix>_<embedding model>_<dimensions>

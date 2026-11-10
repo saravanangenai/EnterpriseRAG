@@ -1,0 +1,36 @@
+[Unit]
+Description=Enterprise RAG API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=erag
+Group=erag
+WorkingDirectory=/opt/erag
+# One worker only: the VM has about 1 GB of RAM. The app reads /opt/erag/.env itself.
+ExecStart=/opt/erag/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+
+# Keep a runaway request from taking the whole VM (and SSH) down with it.
+MemoryHigh=650M
+MemoryMax=800M
+
+# Model/cache files go in the data folder so the read-only system settings below still work.
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=FASTEMBED_CACHE_PATH=/opt/erag/data/cache
+Environment=HF_HOME=/opt/erag/data/cache/hf
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/erag/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

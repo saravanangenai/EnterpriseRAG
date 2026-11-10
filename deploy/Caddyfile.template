@@ -1,0 +1,19 @@
+# Rendered by install.sh: {{SITE}} becomes your domain (automatic HTTPS) or :80 (--no-https).
+{{SITE}} {
+	encode zstd gzip
+	request_body {
+		max_size 25MB
+	}
+	header {
+		{{HSTS}}
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		X-Frame-Options DENY
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'"
+		-Server
+	}
+	reverse_proxy 127.0.0.1:8000 {
+		# Do not buffer: answers stream to the browser token by token (SSE).
+		flush_interval -1
+	}
+}

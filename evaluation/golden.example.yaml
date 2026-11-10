@@ -1,0 +1,27 @@
+# Copy to golden.yaml and replace with questions about YOUR ingested documents.
+# Aim for 40-60 questions: text, table, image/chart, multi-page, plus unanswerable ones.
+# Write the expected answers by hand (generated candidates need human correction).
+#
+# expected: where the evidence lives. doc = the uploaded filename; page and type are optional.
+# answer_contains: strings that a correct answer must include (case-insensitive).
+# reference: a full reference answer (only used by the RAGAS export).
+# answerable: false means the documents do NOT contain the answer; the system must say so.
+
+- id: refund-window
+  question: How many days do customers have to request a refund?
+  expected: [{doc: refunds.pdf, page: 3}]
+  answer_contains: ["14 days"]
+  reference: Customers can request a refund within 14 days.
+
+- id: fee-table
+  question: What is the monthly fee for the premium plan?
+  expected: [{doc: pricing.xlsx, type: table}]
+  answer_contains: ["49"]
+
+- id: chart-value
+  question: What was revenue in Q3 according to the chart?
+  expected: [{doc: report.pdf, type: image}]
+
+- id: not-in-docs
+  question: Who won the football world cup in 2010?
+  answerable: false

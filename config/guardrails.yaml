@@ -1,0 +1,18 @@
+# Single guardrail policy file: review changes like code. Guards fail closed (refuse) on error.
+max_question_chars: 2000
+daily_request_limit: 200          # per user, counted from the audit log
+not_found_message: "I could not find this in the documents."
+refusal_message: "I can't give a reliable, sourced answer to that."
+
+# Starter list only. Regex patterns are NOT a complete injection defence:
+# also rely on the system prompt, the relevance gate and the citation check, and grow
+# this list from the red-team set.
+injection_patterns:
+  - 'ignore\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier)\s+(instructions?|prompts?|rules?)'
+  - 'disregard\s+(all\s+|the\s+)?(system|previous|prior)\b'
+  - 'reveal\s+(your\s+|the\s+)?(system\s+)?(prompt|instructions)'
+  - 'repeat\s+(your\s+|the\s+)?(system\s+)?prompt'
+  - '\byou\s+are\s+now\b'
+  - 'developer\s+mode'
+  - '\bjailbreak\b'
+  - 'act\s+as\s+(an?\s+)?(unrestricted|unfiltered)'
