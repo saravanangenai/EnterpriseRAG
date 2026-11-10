@@ -93,6 +93,25 @@ async def bump_corpus_version(db: aiosqlite.Connection) -> None:
     await db.execute("UPDATE corpus_state SET version = version + 1 WHERE id = 1")
 
 
+INTERRUPTED = "Interrupted by a server restart. Run `python -m scripts.reindex --failed` or upload the file again."
+
+
+async def mark_interrupted(db_path) -> int:
+    """Startup sweep. Ingestion runs inside the server process (one worker), so after a restart nothing is
+    still working on 'pending' or 'processing' rows. Mark them failed so they can be retried, instead of
+    blocking re-uploads of the same file forever. Returns how many rows were changed."""
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute(
+            "UPDATE documents SET status='failed', error=? WHERE status IN ('pending','processing')",
+            (INTERRUPTED,),
+        )
+        n = cur.rowcount
+        if n:
+            await bump_corpus_version(db)  # an interrupted run may have left partial chunks in Qdrant
+        await db.commit()
+    return n
+
+
 async def corpus_version(db_path) -> int:
     async with aiosqlite.connect(db_path) as db:
         row = await (await db.execute("SELECT version FROM corpus_state WHERE id = 1")).fetchone()

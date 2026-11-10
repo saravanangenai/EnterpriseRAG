@@ -1,20 +1,28 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.db import init_db
+from app.db import init_db, mark_interrupted
 from app.routers import auth as auth_router
 from app.routers import chat as chat_router
 from app.routers import documents as documents_router
-from app.settings import get_config
+from app.settings import get_config, get_settings
+
+log = logging.getLogger("startup")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     get_config()  # fail fast on a bad config file
     await init_db()
+    # Assumes one worker per database (see deploy/erag.service): with several, this would also
+    # mark another worker's in-flight ingestions as failed.
+    n = await mark_interrupted(get_settings().db_path)
+    if n:
+        log.warning("marked %d interrupted ingestion(s) as failed; retry with scripts.reindex --failed", n)
     yield
     try:  # send any traces still queued before the process exits
         from app.deps import get_tracer

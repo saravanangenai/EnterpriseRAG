@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Back up the SQLite database and the stored files (raw uploads, extracted images, captions).
-# Qdrant vectors are NOT included: they live in Qdrant Cloud, and can be rebuilt by re-ingesting
-# from the raw files in this backup.
+# Qdrant vectors are NOT included: they live in Qdrant Cloud, and are rebuilt from the raw files in
+# this backup with `python -m scripts.reindex --all`.
 #
 # Settings (environment, or /etc/erag-backup.env when run by the systemd timer):
 #   APP_DIR        default /opt/erag

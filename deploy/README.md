@@ -55,8 +55,8 @@ arguments. It replaces code and dependencies and never touches `/opt/erag/.env` 
 ## Backups
 
 `erag-backup` saves the SQLite database (a consistent copy) plus `data/raw`, `data/assets` and `data/captions` to
-`/var/backups/erag`. It does **not** save Qdrant vectors; those live in Qdrant Cloud and can be rebuilt by
-re-ingesting the raw files.
+`/var/backups/erag`. It does **not** save Qdrant vectors; those live in Qdrant Cloud and are rebuilt from the raw
+files with `scripts.reindex` (below).
 
 - **Encrypt them:** install `age`, create a key pair on your PC (`age-keygen`), keep the private key off the VM, and put
   `AGE_RECIPIENT=age1...` (the public key) in `/etc/erag-backup.env`. Without it the archive is plain.
@@ -66,6 +66,18 @@ re-ingesting the raw files.
   `APP_DIR=/tmp/restore-test NO_SERVICE=1 erag-restore /var/backups/erag/erag-<stamp>.tgz`.
 - **Restore for real:** `sudo AGE_IDENTITY=/path/to/key.txt erag-restore <file>`. The current data folder is moved
   aside, not deleted.
+- **Rebuild Qdrant** after a restore, or when the collection was lost or recreated:
+  `cd /opt/erag && sudo -u erag .venv/bin/python -m scripts.reindex --all` (add `--dry-run` first to see the list).
+  Every chunk is embedded again, so this costs OpenAI embedding calls; captions come from `data/captions`.
+
+## Failed and interrupted ingestions
+
+- Ingestion runs inside the API process. If the service restarts mid-ingestion, the next start marks those
+  documents `failed` ("Interrupted by a server restart") so the same file can be uploaded again.
+- Retry every document whose newest version failed:
+  `cd /opt/erag && sudo -u erag .venv/bin/python -m scripts.reindex --failed`. Exit code 1 if any still fail.
+- After changing the caption prompt or chunking, `scripts.reindex --all` applies it to existing documents; only
+  changed chunks are embedded again.
 
 ## Day-to-day
 

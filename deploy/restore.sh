@@ -34,5 +34,5 @@ if id erag >/dev/null 2>&1; then chown -R erag:erag "$DATA"; fi
 chmod 750 "$DATA"
 [ "${NO_SERVICE:-0}" = "1" ] || systemctl start erag
 echo "Restored from $ARCHIVE."
-echo "Qdrant vectors are not part of the backup. If the collection is empty or out of date,"
-echo "re-upload the documents (or re-ingest from data/raw)."
+echo "Qdrant vectors are not part of the backup. If the collection is empty or out of date, rebuild it:"
+echo "  cd $APP_DIR && sudo -u erag .venv/bin/python -m scripts.reindex --all"

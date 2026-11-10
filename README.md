@@ -97,4 +97,5 @@ cp .env.example .env                                       # then fill in keys, 
 .venv/Scripts/python -m scripts.create_admin --username admin --role admin
 .venv/Scripts/python -m uvicorn app.main:app --reload      # Swagger at /docs
 .venv/Scripts/python -m pytest
+.venv/Scripts/python -m scripts.reindex --failed           # retry failed/interrupted ingestions (--all rebuilds Qdrant)
 ```
