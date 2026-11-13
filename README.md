@@ -1,6 +1,9 @@
-# Enterprise RAG
+# Multimodal Hybrid RAG
 
-Multimodal RAG on a free-tier stack. Design: [docs/tech-stack.pdf](docs/tech-stack.pdf).
+Question answering over your own documents (PDF, Office, HTML, text and images) with **hybrid retrieval**:
+dense vector search and BM25 keyword search in Qdrant, fused with reciprocal rank fusion, then LLM reranking.
+Every answer cites its sources, and guardrails, PII masking, versioned prompts, Langfuse tracing and an evaluation
+gate are built in. Runs on a free-tier stack. Design: [docs/tech-stack.pdf](docs/tech-stack.pdf).
 
 | Job | Provider |
 |---|---|
@@ -12,10 +15,139 @@ Multimodal RAG on a free-tier stack. Design: [docs/tech-stack.pdf](docs/tech-sta
 
 Providers are chosen in `config/config.yaml`; secrets go in `.env`.
 
+## Contents
+
+[Architecture](#architecture) · [Ingestion flow](#ingestion-flow) · [Query flow](#query-flow-hybrid-retrieval) ·
+[Deployment](#deployment) · [Source structure](#source-code-structure) · [Tech stack](#tech-stack) ·
+[Status](#status) · [Tracing](#tracing-langfuse) · [Postman](#postman) · [UI](#ui) · [Evaluation](#evaluation) ·
+[Chat](#chat) · [Ingestion](#ingestion) · [Run](#run)
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[User<br/>browser] --> C[Caddy<br/>HTTPS + React app]
+    C --> A[FastAPI service<br/>JWT auth, roles, routes]
+    A --> I[Ingestion pipeline<br/>parse, caption, chunk, PII]
+    A --> Q[Query pipeline<br/>guard, hybrid search,<br/>rerank, answer]
+    A --> DB[(SQLite<br/>users, documents, chunks,<br/>audit log, eval runs)]
+    I --> FS[(data/<br/>raw files, images,<br/>captions)]
+    I -->|embeddings, vision| OAI[OpenAI]
+    Q -->|query embedding| OAI
+    Q -->|rerank, answer| G[Groq LLM]
+    I -->|dense + BM25 vectors| V[(Qdrant Cloud<br/>hybrid collection)]
+    Q -->|hybrid search| V
+    A -.->|traces, scores| L[Langfuse]
+```
+
+Uploads and questions go through one FastAPI service. Ingestion writes vectors to Qdrant and metadata to SQLite;
+the query pipeline reads both. Langfuse receives IDs, scores and timings, not document text (by default).
+
+## Ingestion flow
+
+```mermaid
+flowchart TB
+    UP["POST /documents<br/>admin or ingestor"] --> H{"Same bytes<br/>already ingested?"}
+    H -->|yes| DUP[/"duplicate (HTTP 200)"/]
+    H -->|no| VER["New version row<br/>raw file saved"]
+    VER --> P["1. Parse<br/>PDF, DOCX, XLSX, CSV,<br/>HTML, MD, TXT, images"]
+    P --> CAP["2. Caption images<br/>OpenAI vision, cached<br/>per image + prompt"]
+    CAP --> CH["3. Chunk<br/>structure-aware,<br/>tables kept whole"]
+    CH --> PII["4. PII flag or mask<br/>Presidio"]
+    PII --> E["5. Embed new chunks only<br/>OpenAI dense + BM25 sparse"]
+    E --> UPS["6. Upsert to Qdrant<br/>content-based chunk IDs"]
+    UPS --> ST["7. Delete stale chunks<br/>older versions superseded"]
+    ST --> R["ready<br/>corpus version bumped,<br/>answer cache invalidated"]
+    P -.->|error| F["failed + error saved<br/>retry: scripts.reindex --failed"]
+    E -.->|error| F
+```
+
+Chunk IDs are a hash of the content, so a new version of a file only embeds the chunks that changed.
+A restart mid-ingestion marks the document `failed` on the next start, so it can be retried.
+
+## Query flow (hybrid retrieval)
+
+```mermaid
+flowchart TB
+    Q["Question<br/>POST /chat or /chat/stream"] --> G{"Input guard<br/>injection patterns, limits"}
+    G -->|blocked| B[/"HTTP 400"/]
+    G -->|ok| AC{"Answer cache hit?<br/>same question, corpus,<br/>prompts and filters"}
+    AC -->|yes| CA["Cached answer<br/>fresh signed image links"]
+    AC -->|no| EMB["Embed question<br/>OpenAI dense + BM25 sparse"]
+    EMB --> HS["Hybrid search in Qdrant<br/>dense top 20 + BM25 top 20"]
+    HS --> RRF["Reciprocal rank fusion"]
+    RRF --> RG{"Top dense score<br/>at least min_score?"}
+    RG -->|no| NF[/"Not found<br/>no LLM call"/]
+    RG -->|yes| RR["LLM rerank (Groq)<br/>keep top 6"]
+    RR --> GEN["Answer from numbered sources<br/>versioned prompt, streamed"]
+    GEN --> CC{"Citations valid?"}
+    CC -->|yes| OUT["Answer + citations + image links<br/>audit row, Langfuse scores, cached"]
+    CC -->|no| GEN2["Regenerate once with<br/>a stricter instruction"]
+    GEN2 --> CC2{"Valid now?"}
+    CC2 -->|yes| OUT
+    CC2 -->|no| RF[/"Refusal"/]
+```
+
+Weak evidence never reaches the LLM, and an answer whose citations cannot be checked is refused rather than shown.
+
+## Deployment
+
+```mermaid
+flowchart LR
+    I[Internet<br/>HTTPS 443] --> C[Caddy<br/>auto TLS, CSP, HSTS]
+    subgraph VM["Google Cloud e2-micro (1 GB RAM)"]
+      C --> U[uvicorn under systemd<br/>127.0.0.1:8000, 1 worker<br/>sandboxed, 800 MB cap]
+      U --> S[(SQLite + data/)]
+      S --> B[Nightly backup timer<br/>erag-backup]
+    end
+    U -->|HTTPS| X[OpenAI · Groq<br/>Qdrant Cloud · Langfuse]
+```
+
+Scripts are in `deploy/` (see `deploy/README.md`); they have not been run on a real VM yet.
+Qdrant vectors are not in the backup: `scripts.reindex --all` rebuilds them from the raw files.
+
+## Source code structure
+
+```
+app/
+  main.py           FastAPI app, startup sweep, static UI
+  routers/          auth, documents, chat (JSON + SSE streaming, feedback, signed assets)
+  ingestion/        parsers, chunking, BM25 sparse vectors, pipeline, reindex
+  retrieval/        query pipeline, LLM rerank, answer cache
+  providers/        OpenAI (embeddings, vision) and Groq (LLM) adapters
+  vectorstore.py    Qdrant hybrid collection (dense + BM25, RRF)
+  guardrails.py     input and output checks          pii.py      Presidio flag / mask
+  prompts.py        versioned prompt registry        tracing.py  Langfuse spans and scores
+  auth.py, db.py, settings.py, signing.py, deps.py
+prompts/            prompt files, one per version (answer, rerank, caption, citation_retry)
+config/             config.yaml (providers, retrieval, cache, prompt versions), guardrails.yaml
+evaluation/         golden and red-team runner, metrics, thresholds gate, RAGAS export
+frontend/           React + TypeScript + Vite UI
+scripts/            create_admin, reindex
+deploy/             install script, systemd units, Caddyfile, backup and restore
+postman/            API collection and environment
+tests/              117 backend tests (fakes only, no network)
+docs/               design document (tech-stack.pdf)
+```
+
+## Tech stack
+
+| Layer | Implementation |
+| --- | --- |
+| API | FastAPI, Pydantic v2, aiosqlite over SQLite, JWT (HS256) with roles, Argon2 passwords |
+| Retrieval | Qdrant Cloud: dense (OpenAI `text-embedding-3-small`, 768 dims) + BM25 (fastembed), RRF fusion |
+| LLMs | Groq for answers and reranking; OpenAI vision for image captions and OCR |
+| Safety | Input and output guardrails, Presidio PII, citation checks, relevance gate, red-team set |
+| Quality | Evaluation harness with a thresholds gate, versioned prompts with content hashes |
+| Observability | Langfuse traces, spans and scores; audit log in SQLite |
+| Front end | React 18, TypeScript, Vite |
+| Delivery | systemd, Caddy, nightly backups on a Google Cloud VM |
+
 ## Status
 
 Built: config, SQLite schema, JWT auth with roles (admin / ingestor / user), provider interfaces and adapters, health endpoint, ingestion, retrieval and chat with guardrails.
-Built since: evaluation harness (`evaluation/`).
+Built since: evaluation harness (`evaluation/`); versioned prompts (`prompts/`); exact-match answer cache invalidated
+on every ingestion or delete; startup sweep for interrupted ingestions; `scripts.reindex` to retry failures or rebuild Qdrant.
 Deploy scripts written (`deploy/`, see `deploy/README.md`): not yet run on a real VM.
 Langfuse tracing built (below), tested against the real SDK with a mock server, not against Langfuse Cloud.
 
